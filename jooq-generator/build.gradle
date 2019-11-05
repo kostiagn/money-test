@@ -1,0 +1,20 @@
+apply plugin: 'java'
+
+group = 'ru.kostiagn'
+version = '0.0.1'
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    jcenter()
+}
+
+dependencies {
+    compile("org.jooq:jooq-codegen:3.12.0")
+}
+
+task cleanBuild {
+    dependsOn 'clean'
+    dependsOn 'build'
+    tasks.findByName('build').mustRunAfter 'clean'
+}

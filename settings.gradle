@@ -1,0 +1,3 @@
+rootProject.name = 'money-test'
+include 'integration-tests'
+includeBuild 'jooq-generator'

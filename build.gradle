@@ -1,0 +1,208 @@
+buildscript {
+    ext {
+        kotlinVersion = '1.3.50'
+        ktorVersion = '1.2.5'
+        flywayVersion = '5.2.4'
+        jooqVersion = '3.12.2'
+        jacksonVersion = '2.9.8'
+        testContainersVersion = '1.12.3'
+        postgresVersion = '42.2.8'
+    }
+
+    repositories {
+        jcenter()
+    }
+
+
+    dependencies {
+        classpath "org.flywaydb:flyway-gradle-plugin:${flywayVersion}"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
+        classpath "org.testcontainers:testcontainers:$testContainersVersion"
+        classpath "org.testcontainers:postgresql:$testContainersVersion"
+        classpath "org.jooq:jooq-codegen:$jooqVersion"
+        classpath "org.postgresql:postgresql:$postgresVersion"
+        classpath "com.github.jengelman.gradle.plugins:shadow:5.1.0"
+        classpath "ru.kostiagn:jooq-generator:0.0.1"
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'kotlin'
+apply plugin: 'idea'
+apply plugin: "org.flywaydb.flyway"
+apply plugin: 'com.github.johnrengelman.shadow'
+
+
+group = 'ru.kostiagn'
+version = '0.0.1'
+
+
+allprojects {
+    sourceCompatibility = '1.8'
+
+    repositories {
+        jcenter()
+    }
+    tasks.withType(JavaCompile) { // https://github.com/nilsmagnus/wsdl2java/issues/28
+        options.fork = true
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        force "org.jooq:jooq:$jooqVersion"
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlinVersion"
+    implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion"
+
+    implementation "org.jooq:jooq:$jooqVersion"
+    implementation "org.flywaydb:flyway-core:$flywayVersion"
+    implementation "org.postgresql:postgresql:$postgresVersion"
+    implementation 'com.zaxxer:HikariCP:3.4.1'
+
+    //guice
+    implementation 'com.google.inject:guice:4.2.2'
+
+    //jackson
+    implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion"
+    implementation "com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonVersion"
+    //ktor
+    compile "io.ktor:ktor-server-netty:$ktorVersion"
+    compile "io.ktor:ktor-jackson:$ktorVersion"
+
+
+    //log
+    implementation 'io.github.microutils:kotlin-logging:1.6.25'
+    implementation "ch.qos.logback:logback-classic:1.2.1"
+
+
+    testImplementation 'junit:junit:4.12'
+    testImplementation "org.testcontainers:testcontainers:$testContainersVersion"
+    testImplementation "org.testcontainers:postgresql:$testContainersVersion"
+    testImplementation "com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0"
+    testImplementation "org.jetbrains.kotlin:kotlin-test:$kotlinVersion"
+    testImplementation "io.ktor:ktor-server-test-host:$ktorVersion"
+    testImplementation 'org.skyscreamer:jsonassert:1.5.0'
+}
+
+compileKotlin {
+    kotlinOptions {
+        freeCompilerArgs = ['-Xjsr305=strict']
+        freeCompilerArgs += "-Xuse-experimental=org.mylibrary.ExperimentalMarker"
+        jvmTarget = '1.8'
+    }
+}
+
+compileTestKotlin {
+    kotlinOptions {
+        freeCompilerArgs = ['-Xjsr305=strict']
+        jvmTarget = '1.8'
+    }
+}
+
+
+import org.jooq.codegen.GenerationTool
+import org.testcontainers.containers.PostgreSQLContainer
+
+def codeGenDb = [:]
+
+tasks.register("startCodeGenDb") {
+
+    doFirst {
+        def container = new PostgreSQLContainer("postgres:10.5-alpine")
+        container.start()
+        codeGenDb = [
+                url      : "jdbc:postgresql://$container.containerIpAddress:$container.firstMappedPort/$container.databaseName",
+                username : container.username,
+                password : container.password,
+                container: container
+        ]
+        println("codeGenDb.url=$codeGenDb.url")
+        println("codeGenDb.username=$codeGenDb.username")
+        println("codeGenDb.password=$codeGenDb.password")
+
+
+        flyway.url = codeGenDb.url
+        flyway.user = codeGenDb.username
+        flyway.password = codeGenDb.password
+    }
+}
+
+
+tasks.register("generateJooq") {
+
+    doFirst {
+        def writer = new StringWriter()
+        def xml = new groovy.xml.MarkupBuilder(writer)
+                .configuration() {
+                    jdbc() {
+                        driver('org.postgresql.Driver')
+                        url(codeGenDb.url)
+                        user(codeGenDb.username)
+                        password(codeGenDb.password)
+                    }
+                    generator() {
+                        strategy() {
+                            name('ru.kostiagn.money.transfer.jooq.SampleGeneratorStrategy')
+                        }
+                        database() {
+                            inputSchema('public')
+                            outputSchema('public')
+                        }
+                        generate([:]) {
+                            relations true
+                            deprecated false
+                            records true
+                            pojos true
+                            fluentSetters true
+                            pojosEqualsAndHashCode true
+                            daos false
+                        }
+                        target() {
+                            packageName('ru.kostiagn.money.transfer.persistence')
+                            directory('src/main/generated')
+                        }
+                    }
+                }
+        def str = writer.toString()
+        println(str)
+        GenerationTool.generate(str)
+
+    }
+    doLast {
+        codeGenDb.container.stop()
+    }
+}
+
+flywayClean.dependsOn startCodeGenDb
+flywayMigrate.dependsOn flywayClean
+generateJooq.dependsOn flywayMigrate
+
+
+flywayClean.doFirst {
+    println "remove ${rootDir}/src/main/generated/"
+    delete "${rootDir}/src/main/generated/"
+}
+
+
+def generatedSourcesPath = file("src/main/generated")
+sourceSets.main.java.srcDir(generatedSourcesPath)
+idea {
+    module {
+        sourceDirs.add(generatedSourcesPath)
+        generatedSourceDirs.add(generatedSourcesPath)
+    }
+}
+
+jar {
+    manifest.attributes("Main-Class": "ru.kostiagn.money.transfer.MainKt");
+}
+shadowJar {
+    classifier = null
+}
+tasks.build.dependsOn(tasks.shadowJar)
+
+

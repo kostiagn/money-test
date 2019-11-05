@@ -1,0 +1,1 @@
+All pojo class have postfix -Pojo (for example: TransactionPojo, AccountPojo)
